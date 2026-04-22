@@ -11,18 +11,18 @@ body{background:var(--bg);color:var(--text);font-family:'DM Mono',monospace;min-
 main{padding:48px;max-width:1400px;}
 .section-label{font-size:0.65rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);margin-bottom:24px;display:flex;align-items:center;gap:12px;}
       .section-label::after{content:'';flex:1;height:1px;background:var(--border);max-width:120px;}
-#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,520px));gap:1px;background:var(--border);border:1px solid var(--border);}
-.card{background:var(--surface);text-decoration:none;color:inherit;display:flex;flex-direction:row;position:relative;transition:background 0.2s ease;overflow:hidden;min-height:180px;}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,360px);gap:1px;background:var(--border);border:1px solid var(--border);}
+.card{background:var(--surface);text-decoration:none;color:inherit;display:flex;flex-direction:row;position:relative;transition:background 0.2s ease;overflow:hidden;min-height:160px;width:360px;}
       .card::before{content:'';position:absolute;top:0;left:0;width:3px;height:0;background:var(--accent);transition:height 0.25s ease;z-index:2;}
 .card:hover{background:var(--card-hover);}
 .card:hover::before{height:100%;}
-.card-info{display:flex;flex-direction:column;gap:10px;padding:28px;width:220px;flex-shrink:0;}
+.card-info{display:flex;flex-direction:column;gap:10px;padding:20px;width:160px;flex-shrink:0;}
 .card-num{font-size:0.6rem;color:var(--muted);letter-spacing:0.15em;}
       .card-name{font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem;color:var(--text);line-height:1.4;padding-bottom:3px;}
 .card-desc{font-size:0.75rem;color:var(--muted);line-height:1.6;flex:1;}
 .card-arrow{font-size:0.7rem;color:var(--accent);letter-spacing:0.1em;margin-top:4px;opacity:0;transform:translateX(-4px);transition:opacity 0.2s ease,transform 0.2s ease;}
       .card:hover .card-arrow{opacity:1;transform:translateX(0);}
-.card-preview{width:300px;flex-shrink:0;position:relative;overflow:hidden;border-left:1px solid var(--border);}
+.card-preview{width:200px;flex-shrink:0;position:relative;overflow:hidden;border-left:1px solid var(--border);}
 .card-preview iframe{position:absolute;top:0;left:0;width:1000px;height:600px;border:none;pointer-events:none;transform-origin:top left;}
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}
       .card{animation:fadeUp 0.35s ease both;}</style>
