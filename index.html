@@ -8,22 +8,24 @@
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:var(--bg);color:var(--text);font-family:'DM Mono',monospace;min-height:100vh;overflow-x:hidden;}
       body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:999;opacity:0.4;}
-main{padding:48px;max-width:1200px;}
+main{padding:48px;max-width:1400px;}
 .section-label{font-size:0.65rem;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);margin-bottom:24px;display:flex;align-items:center;gap:12px;}
       .section-label::after{content:'';flex:1;height:1px;background:var(--border);max-width:120px;}
-#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);}
-.card{background:var(--surface);padding:28px;text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:10px;position:relative;transition:background 0.2s ease;overflow:hidden;}
-      .card::before{content:'';position:absolute;top:0;left:0;width:3px;height:0;background:var(--accent);transition:height 0.25s ease;}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);}
+.card{background:var(--surface);text-decoration:none;color:inherit;display:flex;flex-direction:row;position:relative;transition:background 0.2s ease;overflow:hidden;min-height:180px;}
+      .card::before{content:'';position:absolute;top:0;left:0;width:3px;height:0;background:var(--accent);transition:height 0.25s ease;z-index:2;}
 .card:hover{background:var(--card-hover);}
 .card:hover::before{height:100%;}
+.card-info{display:flex;flex-direction:column;gap:10px;padding:28px;width:220px;flex-shrink:0;}
 .card-num{font-size:0.6rem;color:var(--muted);letter-spacing:0.15em;}
-      .card-name{font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem;color:var(--text);line-height:1.3;}
+      .card-name{font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem;color:var(--text);line-height:1.4;padding-bottom:3px;}
 .card-desc{font-size:0.75rem;color:var(--muted);line-height:1.6;flex:1;}
 .card-arrow{font-size:0.7rem;color:var(--accent);letter-spacing:0.1em;margin-top:4px;opacity:0;transform:translateX(-4px);transition:opacity 0.2s ease,transform 0.2s ease;}
-.card:hover .card-arrow{opacity:1;transform:translateX(0);}
-
+      .card:hover .card-arrow{opacity:1;transform:translateX(0);}
+.card-preview{flex:1;position:relative;overflow:hidden;border-left:1px solid var(--border);}
+.card-preview iframe{position:absolute;top:0;left:0;width:1000px;height:600px;border:none;pointer-events:none;transform-origin:top left;}
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}
-.card{animation:fadeUp 0.35s ease both;}</style>
+      .card{animation:fadeUp 0.35s ease both;}</style>
 </head>
     <body>
 <main>
@@ -34,12 +36,20 @@ main{padding:48px;max-width:1200px;}
 async function loadProjects(){
       const grid=document.getElementById('grid');let projects=[];
 try{const res=await fetch('./projects.json');
-if(!res.ok)throw new Error('not found');
+if(!res.ok)throw new Error('x');
       projects=await res.json();}catch{}
-projects.forEach((p,i)=>{const a=document.createElement('a');
+projects.forEach((p,i)=>{
+const a=document.createElement('a');
       a.className='card';a.href=p.url||'#';a.style.animationDelay=`${i*0.05}s`;
-a.innerHTML=`<div class="card-num">${String(i+1).padStart(2,'0')}</div><div class="card-name">${p.name}</div>${p.description?`<div class="card-desc">${p.description}</div>`:''}<div class="card-arrow">visit →</div>`;
-      grid.appendChild(a);});}
+a.innerHTML=`<div class="card-info"><div class="card-num">${String(i+1).padStart(2,'0')}</div><div class="card-name">${p.name}</div>${p.description?`<div class="card-desc">${p.description}</div>`:''}<div class="card-arrow">visit →</div></div><div class="card-preview"><iframe src="${p.url||''}" loading="lazy" sandbox="allow-same-origin allow-scripts allow-forms"></iframe></div>`;
+      grid.appendChild(a);
+const preview=a.querySelector('.card-preview');
+const iframe=a.querySelector('iframe');
+function scaleIframe(){
+const w=preview.offsetWidth;const h=preview.offsetHeight;
+      const s=w/1000;iframe.style.transform=`scale(${s})`;iframe.style.height=`${h/s}px`;}
+scaleIframe();
+new ResizeObserver(scaleIframe).observe(preview);});}
 loadProjects();
 </script>
     </body>
