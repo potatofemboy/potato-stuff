@@ -3,5 +3,10 @@
     "name": "nothing.",
     "description": "still nothing.",
     "url": "/nothing"
+  },
+  {
+    "name": "gifs",
+    "description": "u can upload and view gifs :3",
+    "url": "/gifs"
   }
 ]
