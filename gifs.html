@@ -91,13 +91,21 @@ async function handleFile(file){
 }
 async function handleUrl(url){
   hideErr();urlInput.value='';setProgress(10,'fetching url…');
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),10000);
   try{
-    const res=await fetch(url);
+    const res=await fetch(url,{signal:controller.signal});
+    clearTimeout(timeout);
     if(!res.ok)throw new Error('server returned '+res.status);
     const blob=await res.blob();
     const rawName=url.split('/').pop().split('?')[0]||'upload';
     await handleFile(new File([blob],rawName,{type:blob.type}))
-  }catch(e){hideProgress();showErr('could not fetch that url: '+e.message)}
+  }catch(e){
+    clearTimeout(timeout);
+    hideProgress();
+    if(e.name==='AbortError')showErr('request timed out — this url might block cross-origin fetches (like discord links). try downloading the file and uploading directly~');
+    else showErr('could not fetch that url: '+e.message)
+  }
 }
 function imageToGif(file){
   return new Promise(resolve=>{
