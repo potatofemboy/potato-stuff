@@ -87,50 +87,59 @@ function encodeGif(frames,w,h,delay){
   const ws=(n)=>{wb(n&255);wb((n>>8)&255)};
   const wstr=(s)=>{for(let i=0;i<s.length;i++)wb(s.charCodeAt(i))};
 
-  // --- Median cut quantizer ---
-  function quantize(data){
-    const n=w*h;
-
-    // Deduplicate pixel colors at 2-bit reduced precision to speed up median cut
-    const colorMap=new Map();
+  function buildPalette(data){
+    // Count frequency of each color (reduced to 6 bits per channel for speed)
+    const freq=new Map();
     for(let i=0;i<data.length;i+=4){
-      const r=data[i],g=data[i+1],bl=data[i+2];
-      const key=(r>>1)<<16|(g>>1)<<8|(bl>>1);
-      if(!colorMap.has(key))colorMap.set(key,[r,g,bl]);
+      const key=(data[i]>>2)<<12|(data[i+1]>>2)<<6|(data[i+2]>>2);
+      freq.set(key,(freq.get(key)||0)+1);
     }
-    const unique=[...colorMap.values()];
-
-    // Recursive median cut — splits bucket along widest color channel
+    // Build weighted entries [r,g,b,count]
+    const entries=[];
+    for(const[key,count]of freq){
+      entries.push([(key>>12&63)<<2,(key>>6&63)<<2,(key&63)<<2,count]);
+    }
+    // Weighted median cut
     function split(bucket,depth){
       if(depth===0||bucket.length===0){
-        let r=0,g=0,bl=0;
-        for(const p of bucket){r+=p[0];g+=p[1];bl+=p[2];}
-        const len=bucket.length||1;
-        return[[r/len|0,g/len|0,bl/len|0]];
+        let r=0,g=0,bl=0,tot=0;
+        for(const p of bucket){r+=p[0]*p[3];g+=p[1]*p[3];bl+=p[2]*p[3];tot+=p[3];}
+        if(!tot)return[[0,0,0]];
+        return[[r/tot|0,g/tot|0,bl/tot|0]];
       }
       let minR=255,maxR=0,minG=255,maxG=0,minB=255,maxB=0;
-      for(const[r,g,bl]of bucket){
-        if(r<minR)minR=r;if(r>maxR)maxR=r;
-        if(g<minG)minG=g;if(g>maxG)maxG=g;
-        if(bl<minB)minB=bl;if(bl>maxB)maxB=bl;
+      for(const p of bucket){
+        if(p[0]<minR)minR=p[0];if(p[0]>maxR)maxR=p[0];
+        if(p[1]<minG)minG=p[1];if(p[1]>maxG)maxG=p[1];
+        if(p[2]<minB)minB=p[2];if(p[2]>maxB)maxB=p[2];
       }
-      const rRange=maxR-minR,gRange=maxG-minG,bRange=maxB-minB;
-      const ch=rRange>=gRange&&rRange>=bRange?0:gRange>=bRange?1:2;
+      const rR=maxR-minR,gR=maxG-minG,bR=maxB-minB;
+      const ch=rR>=gR&&rR>=bR?0:gR>=bR?1:2;
       bucket.sort((a,bb)=>a[ch]-bb[ch]);
-      const mid=bucket.length>>1;
+      let tot=0;for(const p of bucket)tot+=p[3];
+      let half=0,mid=1;
+      for(let i=0;i<bucket.length;i++){half+=bucket[i][3];if(half*2>=tot){mid=i+1;break;}}
+      mid=Math.max(1,Math.min(mid,bucket.length-1));
       return[...split(bucket.slice(0,mid),depth-1),...split(bucket.slice(mid),depth-1)];
     }
-
-    const pal=split(unique,8); // 2^8 = 256 colors
+    const pal=split(entries,8);
     while(pal.length<256)pal.push([0,0,0]);
+    return pal;
+  }
 
-    // Map each pixel to nearest palette entry, with cache for speed
+  function quantize(data,pal){
+    const n=w*h;
+    // Working buffer as Int16 to hold error-diffused values without clamping prematurely
+    const buf=new Int16Array(n*3);
+    for(let i=0;i<n;i++){buf[i*3]=data[i*4];buf[i*3+1]=data[i*4+1];buf[i*3+2]=data[i*4+2];}
+
+    // Nearest palette lookup with cache
     const cache=new Map();
-    const idx=new Uint8Array(n);
-    for(let i=0;i<n;i++){
-      const r=data[i*4],g=data[i*4+1],bl=data[i*4+2];
-      // Cache key quantized to 6 bits per channel
-      const ckey=(r>>2)<<16|(g>>2)<<8|(bl>>2);
+    function nearest(r,g,bl){
+      r=r<0?0:r>255?255:r;
+      g=g<0?0:g>255?255:g;
+      bl=bl<0?0:bl>255?255:bl;
+      const ckey=(r>>2)<<12|(g>>2)<<6|(bl>>2);
       let pi=cache.get(ckey);
       if(pi===undefined){
         let best=0,bd=2147483647;
@@ -139,14 +148,31 @@ function encodeGif(frames,w,h,delay){
           const d=dr*dr+dg*dg+db*db;
           if(d<bd){bd=d;best=j;if(d===0)break;}
         }
-        pi=best;
-        cache.set(ckey,pi);
+        cache.set(ckey,best);pi=best;
       }
-      idx[i]=pi;
+      return pi;
     }
-    return{pal,idx};
+
+    // Floyd-Steinberg dithering
+    const idx=new Uint8Array(n);
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const i=y*w+x;
+        const or=buf[i*3],og=buf[i*3+1],ob=buf[i*3+2];
+        const pi=nearest(or,og,ob);
+        idx[i]=pi;
+        const er=or-pal[pi][0],eg=og-pal[pi][1],eb=ob-pal[pi][2];
+        // Distribute error: right 7/16, below-left 3/16, below 5/16, below-right 1/16
+        if(x+1<w){buf[(i+1)*3]+=er*7>>4;buf[(i+1)*3+1]+=eg*7>>4;buf[(i+1)*3+2]+=eb*7>>4;}
+        if(y+1<h){
+          if(x>0){buf[(i+w-1)*3]+=er*3>>4;buf[(i+w-1)*3+1]+=eg*3>>4;buf[(i+w-1)*3+2]+=eb*3>>4;}
+          buf[(i+w)*3]+=er*5>>4;buf[(i+w)*3+1]+=eg*5>>4;buf[(i+w)*3+2]+=eb*5>>4;
+          if(x+1<w){buf[(i+w+1)*3]+=er>>4;buf[(i+w+1)*3+1]+=eg>>4;buf[(i+w+1)*3+2]+=eb>>4;}
+        }
+      }
+    }
+    return idx;
   }
-  // --- end quantizer ---
 
   function lzw(idx,minBits){
     const cc=1<<minBits,eoi=cc+1;let nc=eoi+1,cs=minBits+1;
@@ -168,12 +194,15 @@ function encodeGif(frames,w,h,delay){
     flush(tab.get(buf),cs);flush(eoi,cs);if(nb>0)out.push(cur&255);
     return out
   }
+
   wstr('GIF89a');ws(w);ws(h);wb(0xF7);wb(0);wb(0);
-  const {pal:pal0,idx:idx0}=quantize(frames[0].data);
+  const pal0=buildPalette(frames[0].data);
+  const idx0=quantize(frames[0].data,pal0);
   for(let i=0;i<256;i++){wb(pal0[i][0]);wb(pal0[i][1]);wb(pal0[i][2])}
   wb(0x21);wb(0xFF);wb(11);wstr('NETSCAPE2.0');wb(3);wb(1);ws(0);wb(0);
   for(let fi=0;fi<frames.length;fi++){
-    const {pal,idx}=fi===0?{pal:pal0,idx:idx0}:quantize(frames[fi].data);
+    const pal=fi===0?pal0:buildPalette(frames[fi].data);
+    const idx=fi===0?idx0:quantize(frames[fi].data,pal);
     wb(0x21);wb(0xF9);wb(4);wb(0);ws(Math.round(delay/10));wb(0);wb(0);
     wb(0x2C);ws(0);ws(0);ws(w);ws(h);wb(0x80|7);
     for(let i=0;i<256;i++){wb(pal[i][0]);wb(pal[i][1]);wb(pal[i][2])}
