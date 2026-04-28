@@ -114,9 +114,12 @@ function imageToGif(file){
     img.onload=()=>{
       const scale=Math.min(1,480/Math.max(img.naturalWidth,img.naturalHeight));
       const w=Math.round(img.naturalWidth*scale),h=Math.round(img.naturalHeight*scale);
+      const c=document.createElement('canvas');c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      const png=c.toDataURL('image/png');
+      URL.revokeObjectURL(objUrl);
       setProgress(40,'encoding gif…');
-      gifshot.createGIF({images:[objUrl],gifWidth:w,gifHeight:h,numFrames:1,frameDuration:1,sampleInterval:10},async obj=>{
-        URL.revokeObjectURL(objUrl);
+      gifshot.createGIF({images:[png],gifWidth:w,gifHeight:h,numFrames:1,frameDuration:1,sampleInterval:10},async obj=>{
         if(obj.error){hideProgress();showErr('gif conversion failed: '+obj.errorMsg);resolve();return}
         setProgress(75,'uploading…');
         await uploadGifDataUrl(obj.image,file.name.replace(/\.[^.]+$/,'')+'.gif');
