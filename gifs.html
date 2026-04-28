@@ -40,12 +40,13 @@ async function H(f){
     await new Promise((res,rej)=>{vid.onloadeddata=res;vid.onerror=()=>rej(new Error('video load failed'));vid.src=URL.createObjectURL(f);vid.load()});
     const sc=Math.min(1,MAX/Math.max(vid.videoWidth||320,vid.videoHeight||240));
     c.width=Math.round((vid.videoWidth||320)*sc)||320;c.height=Math.round((vid.videoHeight||240)*sc)||240;
-    const dur=isFinite(vid.duration)&&vid.duration>0?Math.min(vid.duration,8):1;
-    for(let k=0;k<10;k++){
-      await new Promise(res=>{const t=setTimeout(res,500);vid.onseeked=()=>{clearTimeout(t);res()};vid.currentTime=k===0?0:(k/9)*dur});
+    const dur=isFinite(vid.duration)&&vid.duration>0?Math.min(vid.duration,10):1;
+    const NF=20;
+    for(let k=0;k<NF;k++){
+      await new Promise(res=>{const t=setTimeout(res,600);vid.onseeked=()=>{clearTimeout(t);res()};vid.currentTime=k===0?0:(k/(NF-1))*dur});
       x.drawImage(vid,0,0,c.width,c.height);
       fr.push(x.getImageData(0,0,c.width,c.height));
-      _PF.style.width=(k*8)+'%';
+      _PF.style.width=(k/NF*75)+'%';
     }
   } else {
     _PL.textContent='reading image...';
@@ -63,7 +64,8 @@ async function H(f){
   const r=await fetch(SU+'/storage/v1/object/'+BN+'/'+n,{method:'POST',headers:{'Authorization':'Bearer '+SK,'Content-Type':'image/gif'},body:new Blob([g],{type:'image/gif'})});
   if(r.ok){
     const u=SU+'/storage/v1/object/public/'+BN+'/'+n;
-    await fetch(SU+'/rest/v1/public_gifs',{method:'POST',headers:{'Authorization':'Bearer '+SK,'apikey':SK,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},body:JSON.stringify({u,n,p:true,o:UID})});
+    const dbr=await fetch(SU+'/rest/v1/public_gifs',{method:'POST',headers:{'Authorization':'Bearer '+SK,'apikey':SK,'Content-Type':'application/json','Prefer':'return=representation,resolution=merge-duplicates'},body:JSON.stringify({u,n,p:true,o:UID})});
+    if(!dbr.ok)console.error('db insert failed',dbr.status,await dbr.text());
     let h=JSON.parse(localStorage.getItem('g_h')||'[]');h.unshift({u,n});localStorage.setItem('g_h',JSON.stringify(h));
     _PF.style.width='100%';location.reload();
   } else {
@@ -74,9 +76,11 @@ async function H(f){
   let h=JSON.parse(localStorage.getItem('g_h')||'[]');
   h.forEach(i=>{const c=document.createElement('div');c.className='card';c.innerHTML=`<img src="${i.u}" loading="lazy"/>`;_G.appendChild(c)});
   try{
-    const r=await fetch(SU+'/rest/v1/public_gifs?order=id.desc&limit=60',{headers:{'Authorization':'Bearer '+SK,'apikey':SK}});
+    const r=await fetch(SU+'/rest/v1/public_gifs?select=*&limit=80',{headers:{'Authorization':'Bearer '+SK,'apikey':SK}});
     const pubs=await r.json();
-    if(Array.isArray(pubs))pubs.forEach(i=>{const c=document.createElement('div');c.className='card';c.innerHTML=`<img src="${i.u}" loading="lazy"/>`;_PG.appendChild(c)});
+    console.log('global feed',pubs);
+    if(Array.isArray(pubs))pubs.forEach(i=>{if(i.u){const c=document.createElement('div');c.className='card';c.innerHTML=`<img src="${i.u}" loading="lazy"/>`;_PG.appendChild(c)}});
+    else console.error('unexpected response',pubs);
   }catch(e){console.error(e)}
 })();
 </script>
