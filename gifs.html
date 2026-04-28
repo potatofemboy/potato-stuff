@@ -86,17 +86,68 @@ function encodeGif(frames,w,h,delay){
   const wb=(n)=>{b.push(n&255)};
   const ws=(n)=>{wb(n&255);wb((n>>8)&255)};
   const wstr=(s)=>{for(let i=0;i<s.length;i++)wb(s.charCodeAt(i))};
+
+  // --- Median cut quantizer ---
   function quantize(data){
-    const pal=[[0,0,0]];const map={};const idx=new Uint8Array(w*h);
+    const n=w*h;
+
+    // Deduplicate pixel colors at 2-bit reduced precision to speed up median cut
+    const colorMap=new Map();
     for(let i=0;i<data.length;i+=4){
-      const r=data[i]&0xF8,g=data[i+1]&0xF8,bl=data[i+2]&0xF8;
-      const k=(r<<16)|(g<<8)|bl;
-      if(map[k]===undefined){if(pal.length<256){map[k]=pal.length;pal.push([data[i],data[i+1],data[i+2]])}else{map[k]=0}}
-      idx[i>>2]=map[k]
+      const r=data[i],g=data[i+1],bl=data[i+2];
+      const key=(r>>1)<<16|(g>>1)<<8|(bl>>1);
+      if(!colorMap.has(key))colorMap.set(key,[r,g,bl]);
     }
+    const unique=[...colorMap.values()];
+
+    // Recursive median cut — splits bucket along widest color channel
+    function split(bucket,depth){
+      if(depth===0||bucket.length===0){
+        let r=0,g=0,bl=0;
+        for(const p of bucket){r+=p[0];g+=p[1];bl+=p[2];}
+        const len=bucket.length||1;
+        return[[r/len|0,g/len|0,bl/len|0]];
+      }
+      let minR=255,maxR=0,minG=255,maxG=0,minB=255,maxB=0;
+      for(const[r,g,bl]of bucket){
+        if(r<minR)minR=r;if(r>maxR)maxR=r;
+        if(g<minG)minG=g;if(g>maxG)maxG=g;
+        if(bl<minB)minB=bl;if(bl>maxB)maxB=bl;
+      }
+      const rRange=maxR-minR,gRange=maxG-minG,bRange=maxB-minB;
+      const ch=rRange>=gRange&&rRange>=bRange?0:gRange>=bRange?1:2;
+      bucket.sort((a,bb)=>a[ch]-bb[ch]);
+      const mid=bucket.length>>1;
+      return[...split(bucket.slice(0,mid),depth-1),...split(bucket.slice(mid),depth-1)];
+    }
+
+    const pal=split(unique,8); // 2^8 = 256 colors
     while(pal.length<256)pal.push([0,0,0]);
-    return{pal,idx}
+
+    // Map each pixel to nearest palette entry, with cache for speed
+    const cache=new Map();
+    const idx=new Uint8Array(n);
+    for(let i=0;i<n;i++){
+      const r=data[i*4],g=data[i*4+1],bl=data[i*4+2];
+      // Cache key quantized to 6 bits per channel
+      const ckey=(r>>2)<<16|(g>>2)<<8|(bl>>2);
+      let pi=cache.get(ckey);
+      if(pi===undefined){
+        let best=0,bd=2147483647;
+        for(let j=0;j<pal.length;j++){
+          const dr=r-pal[j][0],dg=g-pal[j][1],db=bl-pal[j][2];
+          const d=dr*dr+dg*dg+db*db;
+          if(d<bd){bd=d;best=j;if(d===0)break;}
+        }
+        pi=best;
+        cache.set(ckey,pi);
+      }
+      idx[i]=pi;
+    }
+    return{pal,idx};
   }
+  // --- end quantizer ---
+
   function lzw(idx,minBits){
     const cc=1<<minBits,eoi=cc+1;let nc=eoi+1,cs=minBits+1;
     const out=[];let cur=0,nb=0;
