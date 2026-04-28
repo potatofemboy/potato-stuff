@@ -65,7 +65,6 @@ h1{font-size:2.4rem;font-weight:600;letter-spacing:-0.05em;background:linear-gra
 <div class="err" id="err"></div>
 <div class="gallery"><div class="g-head">uploaded gifs</div><div class="grid" id="grid"><div class="empty" id="empty">nothing yet — upload something~</div></div></div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/gifshot@0.4.5/build/gifshot.min.js"></script>
 <script>
 const SUPABASE_URL='https://mwqjyivvelpiwqnpjhjj.supabase.co';
 const SUPABASE_KEY='sb_publishable_VtrE6BJwOnWe03jNJ1pidQ_Y2pr8TiR';
@@ -81,139 +80,155 @@ function setProgress(pct,label){progWrap.style.display='block';progLabel.textCon
 function hideProgress(){progWrap.style.display='none';progFill.style.width='0%'}
 function showErr(msg){errBox.style.display='block';errBox.textContent=msg}
 function hideErr(){errBox.style.display='none'}
-async function handleFile(file){
-  hideErr();
-  const type=file.type;
-  if(type==='image/gif'){setProgress(30,'uploading gif…');const buf=await file.arrayBuffer();await uploadGifBlob(new Blob([buf],{type:'image/gif'}),file.name)}
-  else if(type.startsWith('image/')){setProgress(20,'converting image to gif…');await imageToGif(file)}
-  else if(type.startsWith('video/')){setProgress(10,'loading video…');await videoToGif(file)}
-  else showErr('unsupported file type — try an image or video~')
-}
-async function handleUrl(url){
-  hideErr();urlInput.value='';setProgress(10,'fetching url…');
-  const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),10000);
-  try{
-    const res=await fetch(url,{signal:controller.signal});
-    clearTimeout(timeout);
-    if(!res.ok)throw new Error('server returned '+res.status);
-    const blob=await res.blob();
-    const rawName=url.split('/').pop().split('?')[0]||'upload';
-    await handleFile(new File([blob],rawName,{type:blob.type}))
-  }catch(e){
-    clearTimeout(timeout);
-    hideProgress();
-    if(e.name==='AbortError')showErr('request timed out — this url might block cross-origin fetches (like discord links). try downloading the file and uploading directly~');
-    else showErr('could not fetch that url: '+e.message)
+
+function encodeGif(frames,w,h,delay){
+  const b=[];
+  const wb=(n)=>{b.push(n&255)};
+  const ws=(n)=>{wb(n&255);wb((n>>8)&255)};
+  const wstr=(s)=>{for(let i=0;i<s.length;i++)wb(s.charCodeAt(i))};
+  function quantize(data){
+    const pal=[[0,0,0]];const map={};const idx=new Uint8Array(w*h);
+    for(let i=0;i<data.length;i+=4){
+      const r=data[i]&0xF8,g=data[i+1]&0xF8,bl=data[i+2]&0xF8;
+      const k=(r<<16)|(g<<8)|bl;
+      if(map[k]===undefined){if(pal.length<256){map[k]=pal.length;pal.push([data[i],data[i+1],data[i+2]])}else{map[k]=0}}
+      idx[i>>2]=map[k]
+    }
+    while(pal.length<256)pal.push([0,0,0]);
+    return{pal,idx}
   }
+  function lzw(idx,minBits){
+    const cc=1<<minBits,eoi=cc+1;let nc=eoi+1,cs=minBits+1;
+    const out=[];let cur=0,nb=0;
+    function flush(v,bits){cur|=v<<nb;nb+=bits;while(nb>=8){out.push(cur&255);cur>>>=8;nb-=8}}
+    const tab=new Map();for(let i=0;i<cc;i++)tab.set(String(i),i);
+    flush(cc,cs);
+    let buf=String(idx[0]);
+    for(let i=1;i<idx.length;i++){
+      const c=String(idx[i]),nxt=buf+','+c;
+      if(tab.has(nxt)){buf=nxt}
+      else{
+        flush(tab.get(buf),cs);
+        if(nc<4096){tab.set(nxt,nc++);if(nc>(1<<cs)&&cs<12)cs++}
+        else{flush(cc,cs);cs=minBits+1;nc=eoi+1;tab.clear();for(let j=0;j<cc;j++)tab.set(String(j),j)}
+        buf=c
+      }
+    }
+    flush(tab.get(buf),cs);flush(eoi,cs);if(nb>0)out.push(cur&255);
+    return out
+  }
+  wstr('GIF89a');ws(w);ws(h);wb(0xF7);wb(0);wb(0);
+  const {pal:pal0,idx:idx0}=quantize(frames[0].data);
+  for(let i=0;i<256;i++){wb(pal0[i][0]);wb(pal0[i][1]);wb(pal0[i][2])}
+  wb(0x21);wb(0xFF);wb(11);wstr('NETSCAPE2.0');wb(3);wb(1);ws(0);wb(0);
+  for(let fi=0;fi<frames.length;fi++){
+    const {pal,idx}=fi===0?{pal:pal0,idx:idx0}:quantize(frames[fi].data);
+    wb(0x21);wb(0xF9);wb(4);wb(0);ws(Math.round(delay/10));wb(0);wb(0);
+    wb(0x2C);ws(0);ws(0);ws(w);ws(h);wb(0x80|7);
+    for(let i=0;i<256;i++){wb(pal[i][0]);wb(pal[i][1]);wb(pal[i][2])}
+    const lzwData=lzw(idx,8);wb(8);
+    for(let i=0;i<lzwData.length;i+=255){const chunk=lzwData.slice(i,i+255);wb(chunk.length);for(let j=0;j<chunk.length;j++)wb(chunk[j])}
+    wb(0)
+  }
+  wb(0x3B);
+  return new Uint8Array(b)
 }
-function imageToGif(file){
-  return new Promise(resolve=>{
-    const objUrl=URL.createObjectURL(file);
-    const img=new Image();
-    img.onload=()=>{
-      const scale=Math.min(1,480/Math.max(img.naturalWidth,img.naturalHeight));
-      const w=Math.round(img.naturalWidth*scale),h=Math.round(img.naturalHeight*scale);
-      const c=document.createElement('canvas');c.width=w;c.height=h;
-      c.getContext('2d').drawImage(img,0,0,w,h);
-      const png=c.toDataURL('image/png');
-      URL.revokeObjectURL(objUrl);
-      setProgress(40,'encoding gif…');
-      gifshot.createGIF({images:[png],gifWidth:w,gifHeight:h,numFrames:1,frameDuration:1,sampleInterval:10},async obj=>{
-        if(obj.error){hideProgress();showErr('gif conversion failed: '+obj.errorMsg);resolve();return}
-        setProgress(75,'uploading…');
-        await uploadGifDataUrl(obj.image,file.name.replace(/\.[^.]+$/,'')+'.gif');
-        resolve()
-      })
-    };
-    img.onerror=()=>{hideProgress();showErr('could not read that image');resolve()};
-    img.src=objUrl
+
+function loadImg(file){
+  return new Promise((res,rej)=>{
+    const u=URL.createObjectURL(file);
+    const i=new Image();
+    i.onload=()=>{URL.revokeObjectURL(u);res(i)};
+    i.onerror=()=>{URL.revokeObjectURL(u);rej(new Error('could not load image'))};
+    i.src=u
   })
 }
-function videoToGif(file){
+function scaleDims(w,h,max){const s=Math.min(1,max/Math.max(w,h));return[Math.round(w*s)||1,Math.round(h*s)||1]}
+function canvasFrame(img,w,h){const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);return c.getContext('2d').getImageData(0,0,w,h)}
+
+async function imageToGif(file){
+  try{
+    setProgress(30,'loading image…');
+    const img=await loadImg(file);
+    const[w,h]=scaleDims(img.naturalWidth,img.naturalHeight,480);
+    setProgress(55,'encoding gif…');
+    await new Promise(r=>setTimeout(r,20));
+    const frame=canvasFrame(img,w,h);
+    const gifBytes=encodeGif([frame],w,h,100);
+    setProgress(80,'uploading…');
+    await uploadGifBlob(new Blob([gifBytes],{type:'image/gif'}),file.name.replace(/\.[^.]+$/,'')+'.gif')
+  }catch(e){hideProgress();showErr('failed: '+e.message)}
+}
+
+async function videoToGif(file){
   return new Promise(resolve=>{
     const objUrl=URL.createObjectURL(file);
     const video=document.createElement('video');
     video.src=objUrl;video.muted=true;video.preload='metadata';
-    video.addEventListener('loadedmetadata',()=>{
-      const duration=Math.min(video.duration||5,8);
-      const fps=8,totalFrames=Math.min(Math.floor(duration*fps),60);
-      const maxSide=480;
-      const vw=video.videoWidth||480,vh=video.videoHeight||270;
-      const scale=Math.min(1,maxSide/Math.max(vw,vh));
-      const w=Math.round(vw*scale),h=Math.round(vh*scale);
-      const canvas=document.createElement('canvas');
-      canvas.width=w;canvas.height=h;
+    video.addEventListener('loadedmetadata',async()=>{
+      const dur=Math.min(video.duration||5,8);
+      const fps=6,total=Math.min(Math.floor(dur*fps),48);
+      const[w,h]=scaleDims(video.videoWidth||480,video.videoHeight||270,360);
+      const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
       const ctx=canvas.getContext('2d');
-      const frames=[];let captured=0;
-      function captureFrame(i){
-        if(i>=totalFrames){
-          setProgress(65,'encoding gif…');
-          gifshot.createGIF({images:frames,gifWidth:w,gifHeight:h,frameDuration:Math.round(100/fps)/10,sampleInterval:10},async obj=>{
-            URL.revokeObjectURL(objUrl);
-            if(obj.error){hideProgress();showErr('gif conversion failed: '+obj.errorMsg);resolve();return}
-            setProgress(85,'uploading…');
-            await uploadGifDataUrl(obj.image,file.name.replace(/\.[^.]+$/,'')+'.gif');
-            resolve()
-          });
-          return
-        }
-        video.currentTime=(i/totalFrames)*duration;
-        video.addEventListener('seeked',function s(){
-          video.removeEventListener('seeked',s);
-          ctx.drawImage(video,0,0,w,h);
-          frames.push(canvas.toDataURL('image/png'));
-          captured++;
-          setProgress(10+Math.round((captured/totalFrames)*50),'capturing frame '+captured+'/'+totalFrames+'…');
-          captureFrame(i+1)
-        })
+      const frames=[];
+      for(let i=0;i<total;i++){
+        video.currentTime=(i/total)*dur;
+        await new Promise(r=>video.addEventListener('seeked',r,{once:true}));
+        ctx.drawImage(video,0,0,w,h);
+        frames.push(ctx.getImageData(0,0,w,h));
+        setProgress(10+Math.round((i/total)*60),'capturing frame '+(i+1)+'/'+total+'…')
       }
-      captureFrame(0)
+      URL.revokeObjectURL(objUrl);
+      setProgress(72,'encoding gif…');
+      await new Promise(r=>setTimeout(r,20));
+      const gifBytes=encodeGif(frames,w,h,Math.round(1000/fps));
+      setProgress(88,'uploading…');
+      await uploadGifBlob(new Blob([gifBytes],{type:'image/gif'}),file.name.replace(/\.[^.]+$/,'')+'.gif');
+      resolve()
     });
     video.load()
   })
 }
-async function uploadGifDataUrl(dataUrl,filename){
-  const base64=dataUrl.split(',')[1];
-  const binary=atob(base64);
-  const bytes=new Uint8Array(binary.length);
-  for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
-  await uploadGifBlob(new Blob([bytes],{type:'image/gif'}),filename)
+
+async function handleFile(file){
+  hideErr();
+  const t=file.type;
+  if(t==='image/gif'){setProgress(30,'uploading gif…');const buf=await file.arrayBuffer();await uploadGifBlob(new Blob([buf],{type:'image/gif'}),file.name)}
+  else if(t.startsWith('image/')){await imageToGif(file)}
+  else if(t.startsWith('video/')){await videoToGif(file)}
+  else showErr('unsupported file type — try an image or video~')
+}
+async function handleUrl(url){
+  hideErr();urlInput.value='';setProgress(10,'fetching url…');
+  const ctrl=new AbortController();
+  const t=setTimeout(()=>ctrl.abort(),10000);
+  try{
+    const res=await fetch(url,{signal:ctrl.signal});clearTimeout(t);
+    if(!res.ok)throw new Error('status '+res.status);
+    const blob=await res.blob();
+    const name=url.split('/').pop().split('?')[0]||'upload';
+    await handleFile(new File([blob],name,{type:blob.type}))
+  }catch(e){clearTimeout(t);hideProgress();if(e.name==='AbortError')showErr('timed out — url might block cross-origin. download and upload directly~');else showErr('fetch failed: '+e.message)}
 }
 async function uploadGifBlob(blob,filename){
   const name=Date.now()+'_'+filename.replace(/[^a-z0-9.\-_]/gi,'_');
-  const res=await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${name}`,{
-    method:'POST',
-    headers:{'Authorization':'Bearer '+SUPABASE_KEY,'Content-Type':'image/gif','x-upsert':'true'},
-    body:blob
-  });
-  if(!res.ok){const txt=await res.text();hideProgress();showErr('upload failed: '+txt);return}
-  const publicUrl=`${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${name}`;
-  setProgress(100,'done~!');
-  setTimeout(hideProgress,800);
-  addCard(publicUrl,name);
-  saveLocal(publicUrl,name)
+  const res=await fetch(SUPABASE_URL+'/storage/v1/object/'+BUCKET+'/'+name,{method:'POST',headers:{'Authorization':'Bearer '+SUPABASE_KEY,'Content-Type':'image/gif','x-upsert':'true'},body:blob});
+  if(!res.ok){const t=await res.text();hideProgress();showErr('upload failed: '+t);return}
+  const url=SUPABASE_URL+'/storage/v1/object/public/'+BUCKET+'/'+name;
+  setProgress(100,'done~!');setTimeout(hideProgress,800);
+  addCard(url,name);saveLocal(url,name)
 }
 function addCard(url,name){
   const e=document.getElementById('empty');if(e)e.remove();
-  const shortName=name.replace(/^\d+_/,'');
-  const card=document.createElement('div');
-  card.className='card';
-  card.innerHTML=`<img src="${url}" alt="${shortName}" loading="lazy"/><div class="card-foot"><span class="card-name" title="${shortName}">${shortName}</span><button class="copy-btn" onclick="copyUrl('${url}',this)">copy</button></div>`;
+  const short=name.replace(/^\d+_/,'');
+  const card=document.createElement('div');card.className='card';
+  card.innerHTML='<img src="'+url+'" alt="'+short+'" loading="lazy"/><div class="card-foot"><span class="card-name" title="'+short+'">'+short+'</span><button class="copy-btn" onclick="copyUrl(\''+url+'\',this)">copy</button></div>';
   grid.prepend(card)
 }
-function copyUrl(url,btn){
-  navigator.clipboard.writeText(url).then(()=>{btn.textContent='copied!';btn.classList.add('ok');setTimeout(()=>{btn.textContent='copy';btn.classList.remove('ok')},1800)})
-}
-function saveLocal(url,name){
-  const items=JSON.parse(localStorage.getItem('gifs_uploads')||'[]');
-  items.unshift({url,name});
-  localStorage.setItem('gifs_uploads',JSON.stringify(items.slice(0,200)))
-}
-(function loadLocal(){
-  const items=JSON.parse(localStorage.getItem('gifs_uploads')||'[]');
-  if(items.length){const e=document.getElementById('empty');if(e)e.remove();items.forEach(({url,name})=>addCard(url,name))}
-})();
+function copyUrl(url,btn){navigator.clipboard.writeText(url).then(()=>{btn.textContent='copied!';btn.classList.add('ok');setTimeout(()=>{btn.textContent='copy';btn.classList.remove('ok')},1800)})}
+function saveLocal(url,name){const items=JSON.parse(localStorage.getItem('gifs_uploads')||'[]');items.unshift({url,name});localStorage.setItem('gifs_uploads',JSON.stringify(items.slice(0,200)))}
+(function(){const items=JSON.parse(localStorage.getItem('gifs_uploads')||'[]');if(items.length){const e=document.getElementById('empty');if(e)e.remove();items.forEach(({url,name})=>addCard(url,name))}})();
 </script>
 </body>
 </html>
